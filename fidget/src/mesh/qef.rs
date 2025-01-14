@@ -73,47 +73,18 @@ impl QuadraticErrorSolver {
 
         let svd = nalgebra::linalg::SVD::new(self.ata, true, true);
 
-        // Skip any eigenvalues that are **extremely** small relative to the
-        // maximum eigenvalue.  Without this filter, we can see failures in
-        // near-planar situations.
-        const EIGENVALUE_CUTOFF_RELATIVE: f32 = 1e-12;
-        let cutoff = svd.singular_values[0].abs() * EIGENVALUE_CUTOFF_RELATIVE;
-        let start = (0..3)
-            .filter(|i| svd.singular_values[*i].abs() < cutoff)
-            .last()
-            .unwrap_or(0);
+        // "Dual Contouring: The Secret Sauce" recomments a threshold of 0.1
+        // when using normalized gradients, this seems to result in mostly good meshes,
+        // even though it fails on things like the cone model.
+        let sol = svd.solve(&atb, 0.1);
 
-        // "Dual Contouring: The Secret Sauce" recommends a threshold of 0.1
-        // when using normalized gradients, but I've found that fails on
-        // things like the cone model.  Instead, we'll be a little more
-        // clever: we'll pick the smallest epsilon that keeps the feature in
-        // the cell without dramatically increasing QEF error.
-        let mut prev = None;
-        for i in start..4 {
-            // i is the number of singular values to ignore
-            let epsilon = if i == 3 {
-                f32::INFINITY
-            } else {
-                use ieee754::Ieee754;
-                svd.singular_values[2 - i].prev()
-            };
-            let sol = svd.solve(&atb, epsilon);
-            let pos = sol.map(|c| c + center).unwrap_or(center);
-            // We'll clamp the error to a small > 0 value for ease of comparison
-            let err = ((pos.transpose() * self.ata * pos
-                - 2.0 * pos.transpose() * self.atb)[0]
-                + self.btb)
-                .max(1e-6);
+        let pos = sol.map(|c| c + center).unwrap_or(center);
+        // We'll clamp the error to a small > 0 value for ease of comparison
+        let err = ((pos.transpose() * self.ata * pos
+            - 2.0 * pos.transpose() * self.atb)[0]
+            + self.btb)
+            .max(1e-6);
 
-            // If this epsilon dramatically increases the error, then we'll
-            // assume that the previous (possibly out-of-cell) vertex was
-            // genuine and use it.
-            if let Some(p) = prev.filter(|(_, prev_err)| err > prev_err * 2.0) {
-                return p;
-            }
-
-            prev = Some((CellVertex { pos }, err));
-        }
-        prev.unwrap()
+        (CellVertex { pos }, err)
     }
 }
